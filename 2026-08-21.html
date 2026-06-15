@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>21 августа — The International (Dota 2)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .legend { background: #fff; padding: 10px 12px; line-height: 1.6; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.2); font-size: 13px; }
+    .legend i { display: inline-block; width: 20px; height: 4px; margin-right: 6px; vertical-align: middle; }
+    .route-panel {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      background: #fff; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
+      width: min(340px, calc(100vw - 24px)); max-height: calc(100vh - 24px);
+      display: flex; flex-direction: column; font-size: 13px;
+    }
+    .route-panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; border-bottom: 1px solid #eee; font-weight: 600;
+    }
+    .route-panel-actions { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid #eee; }
+    .route-panel-actions button {
+      border: 1px solid #ddd; background: #f8f8f8; border-radius: 6px;
+      padding: 4px 8px; font-size: 12px; cursor: pointer;
+    }
+    .route-panel-actions button:hover { background: #eee; }
+    .route-list { overflow-y: auto; padding: 6px 0; }
+    .route-item {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 8px 12px; border-bottom: 1px solid #f3f3f3;
+    }
+    .route-item:last-child { border-bottom: none; }
+    .route-item.done { opacity: 0.55; }
+    .route-item.done .route-label { text-decoration: line-through; color: #888; }
+    .route-swatch { width: 14px; height: 14px; border-radius: 3px; margin-top: 2px; flex-shrink: 0; }
+    .route-swatch.dashed {
+      background: repeating-linear-gradient(90deg, var(--c) 0 5px, transparent 5px 9px);
+      height: 4px; margin-top: 7px;
+    }
+    .route-meta { font-size: 11px; color: #666; margin-top: 2px; }
+    .route-label { font-weight: 500; line-height: 1.3; }
+    .route-item input { margin-top: 3px; cursor: pointer; flex-shrink: 0; }
+    .line-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+    .line-badge { font-size: 10px; font-weight: 700; color: #fff; padding: 1px 5px; border-radius: 3px; }
+    .metro-steps { margin: 6px 0 0 28px; padding: 0; list-style: none; font-size: 11px; color: #444; }
+    .metro-steps li { margin-bottom: 6px; padding-left: 4px; border-left: 3px solid #ddd; padding-bottom: 4px; }
+    .metro-steps li.transfer { border-left-color: #e67e22; background: #fff8f0; margin-left: -4px; padding: 4px 4px 4px 8px; border-radius: 0 4px 4px 0; }
+    .metro-steps li.done-step { opacity: 0.45; text-decoration: line-through; }
+    .step-num { font-weight: 700; margin-right: 4px; }
+    .step-action { font-size: 10px; font-weight: 600; text-transform: uppercase; }
+    .route-panel.collapsed .route-list,
+    .route-panel.collapsed .route-panel-actions { display: none; }
+    @media (max-width: 480px) {
+      .route-panel { width: calc(100vw - 16px); left: 8px; top: 8px; max-height: 45vh; }
+      .route-panel-actions button { padding: 6px 10px; font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="route-panel" id="routePanel">
+    <div class="route-panel-header">
+      <span>Пройденные маршруты</span>
+      <button type="button" id="togglePanel" title="Свернуть">−</button>
+    </div>
+    <div class="route-panel-actions">
+      <button type="button" id="showAllBtn">Показать все</button>
+      <button type="button" id="resetBtn">Сбросить</button>
+    </div>
+    <div class="route-list" id="routeList"></div>
+  </div>
+  <script>
+    const STORAGE_KEY = "shanghai-trip-2026-08-21";
+    const markers = [{"id": "hotel", "lat": 31.1491503, "lon": 121.5032299, "title": "Отель", "desc": "Shanshui Hotel · 上南路3090号"}, {"id": "yangsi", "lat": 31.157167, "lon": 121.496722, "title": "Метро 杨思", "desc": "Yangsi · Line 6/8 · выход 1"}, {"id": "osc", "lat": 31.1544503, "lon": 121.474882, "title": "TI Arena", "desc": "Oriental Sports Center · TI 2026"}];
+    const polylines = [{"name": "hotel_osc_metro_line__L6_0", "parentRoute": "hotel_osc_metro_line", "type": "metro", "line": 6, "color": "#D40068", "dashArray": null, "weight": 6, "coords": [[31.157232, 121.496872], [31.156299, 121.497423], [31.156203, 121.497148], [31.155464, 121.494743], [31.155365, 121.494401], [31.15485, 121.492672], [31.154314, 121.490938], [31.153478, 121.488083], [31.153261, 121.487788], [31.152975, 121.487937], [31.152699, 121.488097], [31.151819, 121.488608], [31.151589, 121.488741], [31.15138, 121.488862], [31.150831, 121.48918], [31.150358, 121.489455], [31.150338, 121.48886], [31.150326, 121.488559], [31.150285, 121.487776], [31.150051, 121.484669], [31.149939, 121.483132], [31.149907, 121.482741], [31.14975, 121.481536], [31.149591, 121.480447], [31.149582, 121.480368], [31.14948, 121.479676], [31.149012, 121.47644], [31.149216, 121.476437], [31.149743, 121.476405], [31.149902, 121.476386], [31.150042, 121.476362], [31.151144, 121.476134], [31.151315, 121.476098], [31.151413, 121.476078], [31.151612, 121.476037], [31.152676, 121.475817], [31.153483, 121.475649], [31.153682, 121.475608], [31.153998, 121.475573], [31.154232, 121.475568], [31.154479, 121.475591], [31.154713, 121.475648], [31.154835, 121.47569], [31.154862, 121.475513], [31.154892, 121.47531], [31.154899, 121.475265], [31.154936, 121.475026], [31.154981, 121.474795], [31.155031, 121.47458], [31.155079, 121.474398], [31.15496, 121.474352], [31.15491, 121.474538], [31.154858, 121.474759], [31.154816, 121.474978]], "distance_m": null, "duration_min": 18, "label": "Line 6: yangsi → osc", "cost_cny": "3", "line_info": "Line 6 (розовая) → Oriental Sports Center", "route_label": "Метро: Yangsi → TI Arena", "steps": [{"num": 1, "station": "yangsi", "action": "board", "line": 6, "title": "Садимся — Yangsi", "station_cn": "杨思", "direction": "港城路 Gangcheng Road", "instruction": "Line 6 (розовая), направление на север. Пересадок нет — едете до конечной стороны."}, {"num": 2, "station": "osc", "action": "exit", "line": 6, "title": "ВЫХОД — Oriental Sports Center", "station_cn": "东方体育中心", "direction": null, "instruction": "Выход 1 или 2 — ближе к арене TI. ~5–10 мин пешком до входа. Имейте при себе паспорт и QR-билет."}]}];
+    const metroGuides = [{"num": 1, "station": "yangsi", "action": "board", "line": 6, "title": "Садимся — Yangsi", "station_cn": "杨思", "direction": "港城路 Gangcheng Road", "instruction": "Line 6 (розовая), направление на север. Пересадок нет — едете до конечной стороны.", "route_key": "hotel_osc_metro_line", "route_label": "Метро: Yangsi → TI Arena", "lat": 31.157167, "lon": 121.496722, "action_color": "#27ae60", "action_icon": "▶", "action_label": "Сесть", "line_colors": ["#D40068"]}, {"num": 2, "station": "osc", "action": "exit", "line": 6, "title": "ВЫХОД — Oriental Sports Center", "station_cn": "东方体育中心", "direction": null, "instruction": "Выход 1 или 2 — ближе к арене TI. ~5–10 мин пешком до входа. Имейте при себе паспорт и QR-билет.", "route_key": "hotel_osc_metro_line", "route_label": "Метро: Yangsi → TI Arena", "lat": 31.1544503, "lon": 121.474882, "action_color": "#2980b9", "action_icon": "↗", "action_label": "Выход", "line_colors": ["#D40068"]}];
+    const metroLineColors = {"1": "#E3002B", "2": "#82BF25", "3": "#FCD600", "4": "#461D84", "5": "#944D9A", "6": "#D40068", "7": "#ED6F00", "8": "#0094D8", "9": "#87CAED", "10": "#C6AFD4", "11": "#871C2B", "12": "#007A60", "13": "#E999C0"};
+    const center = [31.1535892, 121.4916113];
+    const zoom = 13;
+
+    const typeIcon = { walk: '🚶', metro: '🚇', taxi: '🚕' };
+    const typeLabel = { walk: 'Пешком', metro: 'Метро', taxi: 'Такси' };
+
+    function loadDoneRoutes() {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+      } catch (e) { return {}; }
+    }
+
+    function saveDoneRoutes(done) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(done));
+    }
+
+    // Абсолютные URL — иначе в Obsidian iframe (Embed HTML) иконки маркеров пустые
+    delete L.Icon.Default.prototype._getIconUrl;
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    });
+
+    const map = L.map('map', { preferCanvas: false }).setView(center, zoom);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap', updateWhenIdle: false
+    }).addTo(map);
+
+    const hotelMarker = markers.find(m => m.id === 'hotel');
+    if (hotelMarker) {
+      L.circleMarker([hotelMarker.lat, hotelMarker.lon], {
+        radius: 10, color: '#c0392b', fillColor: '#e74c3c', fillOpacity: 0.9, weight: 2
+      }).addTo(map).bindPopup('<b>Отель</b><br>上南路3090号');
+    }
+
+    markers.forEach(m => {
+      L.marker([m.lat, m.lon]).addTo(map).bindPopup(`<b>${m.title}</b><br>${m.desc}`);
+    });
+
+    const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lon]));
+    const routeLayers = {};
+    const stepMarkerLayers = {};
+    let doneRoutes = loadDoneRoutes();
+    const doneStepsKey = STORAGE_KEY + '-steps';
+    let doneSteps = (() => { try { return JSON.parse(localStorage.getItem(doneStepsKey) || '{}'); } catch(e) { return {}; } })();
+
+    function saveDoneSteps() { localStorage.setItem(doneStepsKey, JSON.stringify(doneSteps)); }
+
+    function stepPopup(s) {
+      const lines = (s.lines || (s.line ? [s.line] : [])).map(ln =>
+        `<span style="background:${metroLineColors[ln]||'#999'};color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;margin-right:3px">L${ln}</span>`
+      ).join('');
+      let html = `<b>${s.num}. ${s.title}</b><br><small>${s.station_cn}</small>`;
+      html += `<br><span style="color:${s.action_color};font-weight:600">${s.action_label}</span>`;
+      if (lines) html += `<br>${lines}`;
+      if (s.direction) html += `<br>→ <b>${s.direction}</b>`;
+      html += `<hr style="margin:6px 0"><div style="max-width:260px;line-height:1.4">${s.instruction}</div>`;
+      html += `<br><button onclick="markStepDone('${s.route_key}',${s.num})" style="cursor:pointer;margin-top:4px">✓ Шаг пройден</button>`;
+      return html;
+    }
+
+    metroGuides.forEach(s => {
+      const isTransfer = s.action === 'transfer';
+      const size = isTransfer ? 30 : 24;
+      const icon = L.divIcon({
+        className: '',
+        html: `<div style="background:${s.action_color};color:#fff;width:${size}px;height:${size}px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:${isTransfer?13:12}px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35)">${s.num}</div>`,
+        iconSize: [size, size], iconAnchor: [size/2, size/2]
+      });
+      const m = L.marker([s.lat, s.lon], { icon, zIndexOffset: 1000 + s.num })
+        .bindPopup(stepPopup(s));
+      if (!stepMarkerLayers[s.route_key]) stepMarkerLayers[s.route_key] = [];
+      stepMarkerLayers[s.route_key].push(m);
+    });
+
+    window.markStepDone = function(routeKey, num) {
+      doneSteps[routeKey + '-' + num] = true;
+      saveDoneSteps();
+      applyRouteVisibility();
+      map.closePopup();
+    };
+
+    polylines.forEach(p => {
+      const parent = p.parentRoute || p.name;
+      const line = L.polyline(p.coords, {
+        color: p.color, weight: p.weight, opacity: 0.92, dashArray: p.dashArray
+      });
+      bounds.extend(line.getBounds());
+      let popup = `<b>${p.line ? 'Line ' + p.line : (typeIcon[p.type] || '')} ${p.label}</b>`;
+      if (p.route_label && p.line) popup = `<b>Line ${p.line}</b> · ${p.route_label}<br><small>${p.label}</small>`;
+      if (p.duration_min && !p.line) popup += `<br>~${p.duration_min} мин`;
+      if (p.distance_m) popup += `<br>${p.distance_m} м`;
+      if (p.cost_cny) popup += `<br>~¥${p.cost_cny}`;
+      if (p.line_info) popup += `<br><small>${p.line_info}</small>`;
+      popup += `<br><br><button onclick="markRouteDone('${parent}')" style="cursor:pointer">✓ Отметить пройденным</button>`;
+      line.bindPopup(popup);
+      if (!routeLayers[parent]) routeLayers[parent] = [];
+      routeLayers[parent].push(line);
+    });
+
+    function applyRouteVisibility() {
+      Object.entries(routeLayers).forEach(([parent, lines]) => {
+        lines.forEach(line => {
+          if (doneRoutes[parent]) {
+            if (map.hasLayer(line)) map.removeLayer(line);
+          } else {
+            if (!map.hasLayer(line)) line.addTo(map);
+          }
+        });
+      });
+      Object.entries(stepMarkerLayers).forEach(([parent, markers]) => {
+        markers.forEach(m => {
+          if (doneRoutes[parent]) {
+            if (map.hasLayer(m)) map.removeLayer(m);
+          } else {
+            if (!map.hasLayer(m)) m.addTo(map);
+          }
+        });
+      });
+      renderRouteList();
+    }
+
+    window.markRouteDone = function(parent) {
+      doneRoutes[parent] = true;
+      saveDoneRoutes(doneRoutes);
+      applyRouteVisibility();
+      map.closePopup();
+    };
+
+    function renderRouteList() {
+      const list = document.getElementById('routeList');
+      list.innerHTML = '';
+      const parents = [...new Set(polylines.map(p => p.parentRoute || p.name))];
+      parents.forEach(parent => {
+        const segs = polylines.filter(p => (p.parentRoute || p.name) === parent);
+        const p = segs[0];
+        const isDone = !!doneRoutes[parent];
+        const item = document.createElement('label');
+        item.className = 'route-item' + (isDone ? ' done' : '');
+        const meta = [
+          typeLabel[p.type] || p.type,
+          p.duration_min ? '~' + p.duration_min + ' мин' : '',
+          p.cost_cny ? '¥' + p.cost_cny : ''
+        ].filter(Boolean).join(' · ');
+        const lineBadges = segs.filter(s => s.line).map(s =>
+          `<span class="line-badge" style="background:${s.color}">L${s.line}</span>`
+        ).join('');
+        const swatch = p.type === 'metro' && segs.length > 1
+          ? segs.map(s => `<span class="route-swatch" style="background:${s.color};width:10px;height:10px;display:inline-block;border-radius:2px;margin-right:2px"></span>`).join('')
+          : `<span class="route-swatch" style="background:${p.color};width:14px;height:14px;display:inline-block;border-radius:3px"></span>`;
+
+        const stepsForRoute = metroGuides.filter(g => g.route_key === parent);
+        let stepsHtml = '';
+        if (stepsForRoute.length) {
+          stepsHtml = '<ol class="metro-steps">' + stepsForRoute.map(s => {
+            const stepDone = doneSteps[s.route_key + '-' + s.num];
+            const cls = (s.action === 'transfer' ? 'transfer' : '') + (stepDone ? ' done-step' : '');
+            const lineTag = (s.lines || (s.line ? [s.line] : [])).map(ln =>
+              `<span class="line-badge" style="background:${metroLineColors[ln]}">L${ln}</span>`
+            ).join(' ');
+            return `<li class="${cls}"><span class="step-num">${s.num}.</span>`
+              + `<span class="step-action" style="color:${s.action_color}">${s.action_label}</span> `
+              + `<b>${s.title}</b> ${lineTag}`
+              + (s.direction ? `<br><small>→ ${s.direction}</small>` : '')
+              + `<br><small>${s.instruction.substring(0, 120)}${s.instruction.length>120?'…':''}</small></li>`;
+          }).join('') + '</ol>';
+        }
+
+        item.innerHTML = `
+          <input type="checkbox" ${isDone ? 'checked' : ''} data-route="${parent}" title="Скрыть пройденный маршрут">
+          <div style="display:flex;gap:2px;flex-wrap:wrap;margin-top:2px">${swatch}</div>
+          <div style="flex:1">
+            <div class="route-label">${typeIcon[p.type] || ''} ${p.route_label || p.label}</div>
+            <div class="route-meta">${meta}</div>
+            ${lineBadges ? '<div class="line-badges">' + lineBadges + '</div>' : ''}
+            ${stepsHtml}
+          </div>`;
+        list.appendChild(item);
+      });
+
+      list.querySelectorAll('input[type=checkbox]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const name = cb.dataset.route;
+          if (cb.checked) doneRoutes[name] = true;
+          else delete doneRoutes[name];
+          saveDoneRoutes(doneRoutes);
+          applyRouteVisibility();
+        });
+      });
+    }
+
+    document.getElementById('showAllBtn').addEventListener('click', () => {
+      doneRoutes = {};
+      saveDoneRoutes(doneRoutes);
+      applyRouteVisibility();
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      if (confirm('Сбросить все отметки пройденных маршрутов и шагов?')) {
+        doneRoutes = {};
+        doneSteps = {};
+        saveDoneRoutes(doneRoutes);
+        saveDoneSteps();
+        applyRouteVisibility();
+      }
+    });
+
+    document.getElementById('togglePanel').addEventListener('click', (e) => {
+      const panel = document.getElementById('routePanel');
+      const collapsed = panel.classList.toggle('collapsed');
+      e.target.textContent = collapsed ? '+' : '−';
+    });
+
+    // На телефоне панель по умолчанию свёрнута — больше места для карты
+    if (window.matchMedia('(max-width: 480px)').matches) {
+      const panel = document.getElementById('routePanel');
+      panel.classList.add('collapsed');
+      document.getElementById('togglePanel').textContent = '+';
+    }
+
+    applyRouteVisibility();
+
+    const fitMap = () => map.fitBounds(bounds.pad(0.1), { animate: false, padding: [20, 20] });
+    const refreshMapSize = () => {
+      map.invalidateSize({ animate: false, pan: false });
+      fitMap();
+    };
+    refreshMapSize();
+
+    // Embed HTML / iframe: размер контейнера приходит позже — без этого серые «дыры» в тайлах
+    if (window.self !== window.top) {
+      [50, 150, 400, 1000].forEach(ms => setTimeout(refreshMapSize, ms));
+      if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(() => refreshMapSize()).observe(document.getElementById('map'));
+      }
+    }
+    window.addEventListener('resize', refreshMapSize);
+
+    // В Obsidian (iframe): сначала клик — потом зум колёсиком, иначе скроллится заметка
+    if (window.self !== window.top) {
+      map.scrollWheelZoom.disable();
+      const hint = L.control({ position: 'topright' });
+      hint.onAdd = function() {
+        const d = L.DomUtil.create('div', 'legend');
+        d.id = 'mapHint';
+        d.innerHTML = '<b>Кликните по карте</b><br>затем тяните пальцем/мышью<br>колёсико = зум';
+        return d;
+      };
+      hint.addTo(map);
+      map.once('click', () => {
+        map.scrollWheelZoom.enable();
+        const h = document.getElementById('mapHint');
+        if (h) h.parentElement.parentElement.remove();
+      });
+    }
+
+    const legend = L.control({ position: 'bottomright' });
+    legend.onAdd = function() {
+      const div = L.DomUtil.create('div', 'legend');
+      div.innerHTML = '<b>Типы линий</b><br>'
+        + '<i style="background:#2980b9"></i>Пешком<br>'
+        + '<i style="background:#f39c12"></i>Такси<br>'
+        + '<b>Метро Шанхая</b><br>'
+        + "<i style=\"background:#D40068\"></i>Line 6<br>"
+        + '<span style="color:#e74c3c">●</span> Отель<br>'
+        + '<small>①②③ — шаги метро<br>'
+        + '<span style="color:#e67e22">●</span> оранжевый = пересадка</small>';
+      return div;
+    };
+    legend.addTo(map);
+  </script>
+</body>
+</html>

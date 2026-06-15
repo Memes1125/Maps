@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>22 августа — Shanghai Disneyland</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .legend { background: #fff; padding: 10px 12px; line-height: 1.6; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.2); font-size: 13px; }
+    .legend i { display: inline-block; width: 20px; height: 4px; margin-right: 6px; vertical-align: middle; }
+    .route-panel {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      background: #fff; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
+      width: min(340px, calc(100vw - 24px)); max-height: calc(100vh - 24px);
+      display: flex; flex-direction: column; font-size: 13px;
+    }
+    .route-panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; border-bottom: 1px solid #eee; font-weight: 600;
+    }
+    .route-panel-actions { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid #eee; }
+    .route-panel-actions button {
+      border: 1px solid #ddd; background: #f8f8f8; border-radius: 6px;
+      padding: 4px 8px; font-size: 12px; cursor: pointer;
+    }
+    .route-panel-actions button:hover { background: #eee; }
+    .route-list { overflow-y: auto; padding: 6px 0; }
+    .route-item {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 8px 12px; border-bottom: 1px solid #f3f3f3;
+    }
+    .route-item:last-child { border-bottom: none; }
+    .route-item.done { opacity: 0.55; }
+    .route-item.done .route-label { text-decoration: line-through; color: #888; }
+    .route-swatch { width: 14px; height: 14px; border-radius: 3px; margin-top: 2px; flex-shrink: 0; }
+    .route-swatch.dashed {
+      background: repeating-linear-gradient(90deg, var(--c) 0 5px, transparent 5px 9px);
+      height: 4px; margin-top: 7px;
+    }
+    .route-meta { font-size: 11px; color: #666; margin-top: 2px; }
+    .route-label { font-weight: 500; line-height: 1.3; }
+    .route-item input { margin-top: 3px; cursor: pointer; flex-shrink: 0; }
+    .line-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+    .line-badge { font-size: 10px; font-weight: 700; color: #fff; padding: 1px 5px; border-radius: 3px; }
+    .metro-steps { margin: 6px 0 0 28px; padding: 0; list-style: none; font-size: 11px; color: #444; }
+    .metro-steps li { margin-bottom: 6px; padding-left: 4px; border-left: 3px solid #ddd; padding-bottom: 4px; }
+    .metro-steps li.transfer { border-left-color: #e67e22; background: #fff8f0; margin-left: -4px; padding: 4px 4px 4px 8px; border-radius: 0 4px 4px 0; }
+    .metro-steps li.done-step { opacity: 0.45; text-decoration: line-through; }
+    .step-num { font-weight: 700; margin-right: 4px; }
+    .step-action { font-size: 10px; font-weight: 600; text-transform: uppercase; }
+    .route-panel.collapsed .route-list,
+    .route-panel.collapsed .route-panel-actions { display: none; }
+    @media (max-width: 480px) {
+      .route-panel { width: calc(100vw - 16px); left: 8px; top: 8px; max-height: 45vh; }
+      .route-panel-actions button { padding: 6px 10px; font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="route-panel" id="routePanel">
+    <div class="route-panel-header">
+      <span>Пройденные маршруты</span>
+      <button type="button" id="togglePanel" title="Свернуть">−</button>
+    </div>
+    <div class="route-panel-actions">
+      <button type="button" id="showAllBtn">Показать все</button>
+      <button type="button" id="resetBtn">Сбросить</button>
+    </div>
+    <div class="route-list" id="routeList"></div>
+  </div>
+  <script>
+    const STORAGE_KEY = "shanghai-trip-2026-08-22";
+    const markers = [{"id": "hotel", "lat": 31.1491503, "lon": 121.5032299, "title": "Отель", "desc": "Shanshui Hotel · 上南路3090号"}, {"id": "disney", "lat": 31.1462523, "lon": 121.6562825, "title": "Disneyland", "desc": "Shanghai Disney Resort"}, {"id": "yangsi", "lat": 31.157167, "lon": 121.496722, "title": "Метро 杨思", "desc": "Yangsi · Line 6/8 · выход 1"}, {"id": "century_ave", "lat": 31.230397, "lon": 121.523742, "title": "Century Ave", "desc": "Lines 2/4/6/9 · пересадка"}];
+    const polylines = [{"name": "hotel_disney_metro__L6_0", "parentRoute": "hotel_disney_metro", "type": "metro", "line": 6, "color": "#D40068", "dashArray": null, "weight": 6, "coords": [[31.157232, 121.496872], [31.156299, 121.497423], [31.156205, 121.497488], [31.15625, 121.497642], [31.156349, 121.497596], [31.156987, 121.497218], [31.157719, 121.496778], [31.158527, 121.496295], [31.159132, 121.495791], [31.159895, 121.495024], [31.160196, 121.494777], [31.160581, 121.494512], [31.161042, 121.494248], [31.161359, 121.494089], [31.161644, 121.493977], [31.162828, 121.493529], [31.163301, 121.493366], [31.163466, 121.493313], [31.164331, 121.493103], [31.164742, 121.493023], [31.165307, 121.492977], [31.165628, 121.492944], [31.166271, 121.492893], [31.1668, 121.492849], [31.167787, 121.492758], [31.16833, 121.492719], [31.169392, 121.492696], [31.170237, 121.49264], [31.170504, 121.492605], [31.170976, 121.492495], [31.171824, 121.492203], [31.172371, 121.492055], [31.173222, 121.491793], [31.173323, 121.491763], [31.173426, 121.492757], [31.17348, 121.493273], [31.173498, 121.493452], [31.173759, 121.495976], [31.173907, 121.498262], [31.173939, 121.498709], [31.174155, 121.500763], [31.174244, 121.501713], [31.17443, 121.503754], [31.174647, 121.506372], [31.174781, 121.507826], [31.174956, 121.509801], [31.175151, 121.510787], [31.175206, 121.511026], [31.175375, 121.511762], [31.175657, 121.512715], [31.175999, 121.513824], [31.176124, 121.514263], [31.176198, 121.51454], [31.176309, 121.514548], [31.176626, 121.51458], [31.176769, 121.514589], [31.177155, 121.514666], [31.177529, 121.514748], [31.179337, 121.515435], [31.179891, 121.515654], [31.180263, 121.515797], [31.181582, 121.516334], [31.18231, 121.516626], [31.182541, 121.516727], [31.182796, 121.516872], [31.18473, 121.51763], [31.184967, 121.517617], [31.185186, 121.517704], [31.185603, 121.517867], [31.185819, 121.517951], [31.186962, 121.518398], [31.187324, 121.518683], [31.187927, 121.518927], [31.188739, 121.519257], [31.189427, 121.519548], [31.18966, 121.519647], [31.18979, 121.519698], [31.18995, 121.519757], [31.190118, 121.519821], [31.190935, 121.520135], [31.19122, 121.520226], [31.191503, 121.520337], [31.193468, 121.521104], [31.193768, 121.521218], [31.194233, 121.521399], [31.195079, 121.521736], [31.195537, 121.521919], [31.197184, 121.522576], [31.197453, 121.522591], [31.198154, 121.522876], [31.198601, 121.523053], [31.198942, 121.52319], [31.199276, 121.523313], [31.199513, 121.523433], [31.19972, 121.523563], [31.199936, 121.523722], [31.200149, 121.52391], [31.200354, 121.524083], [31.200501, 121.524194], [31.200655, 121.52429], [31.20087, 121.524409], [31.201027, 121.524486], [31.201203, 121.524554], [31.201405, 121.524617], [31.201558, 121.524651], [31.201702, 121.524672], [31.201854, 121.524684], [31.202144, 121.524694], [31.202419, 121.524699], [31.202608, 121.524711], [31.202845, 121.52475], [31.203038, 121.524814], [31.20329, 121.524921], [31.206939, 121.526369], [31.207704, 121.526668], [31.208371, 121.526918], [31.209567, 121.527386], [31.210166, 121.527625], [31.211406, 121.528124], [31.212149, 121.528578], [31.212699, 121.528784], [31.213282, 121.529003], [31.21336, 121.529017], [31.213563, 121.529052], [31.21431, 121.529331], [31.216328, 121.530147], [31.216504, 121.530216], [31.216611, 121.530258], [31.21676, 121.530321], [31.217261, 121.530526], [31.217358, 121.530561], [31.217661, 121.530636], [31.21908, 121.531182], [31.219553, 121.531376], [31.219794, 121.531483], [31.220546, 121.531785], [31.221321, 121.532096], [31.221444, 121.532145], [31.221958, 121.532386], [31.221982, 121.532397], [31.222263, 121.532549], [31.222599, 121.532764], [31.222931, 121.532996], [31.223387, 121.533366], [31.223472, 121.533402], [31.223583, 121.533458], [31.223658, 121.533517], [31.223975, 121.533852], [31.224007, 121.533886], [31.224089, 121.533956], [31.224175, 121.534014], [31.224262, 121.534054], [31.224312, 121.534057], [31.224357, 121.534036], [31.224406, 121.534001], [31.224475, 121.53393], [31.224573, 121.533797], [31.224634, 121.533679], [31.226032, 121.531357], [31.226069, 121.531295], [31.226131, 121.531186], [31.226179, 121.531101], [31.226245, 121.530984], [31.22684, 121.529935], [31.22786, 121.528138], [31.228785, 121.526508], [31.228894, 121.526315], [31.229122, 121.525877], [31.229256, 121.525658], [31.229549, 121.52511], [31.230335, 121.523745], [31.230355, 121.523709]], "distance_m": null, "duration_min": 55, "label": "Line 6: yangsi → century_ave", "cost_cny": "6-8", "line_info": "Line 6 → Century Ave · Line 2 → Guanglan · Line 11 (бордовая) → Disney Resort", "route_label": "Метро: отель → Disney", "steps": [{"num": 1, "station": "yangsi", "action": "board", "line": 6, "title": "Садимся — Yangsi", "station_cn": "杨思", "direction": "港城路 Gangcheng Road", "instruction": "Line 6 → Century Avenue."}, {"num": 2, "station": "century_ave", "action": "transfer", "lines": [6, 2], "title": "ПЕРЕСАДКА — Century Avenue", "station_cn": "世纪大道", "direction": "徐泾东 East Xujing", "instruction": "Пересадка на Line 2 → Guanglan Road."}, {"num": 3, "station": "guanglan", "action": "transfer", "lines": [2, 11], "title": "ПЕРЕСАДКА — Guanglan Road", "station_cn": "广兰路", "direction": "迪士尼 Disney Resort", "instruction": "⚠️ Пересадка на Line 11 (бордовая)! Следуйте 11号线 → 迪士尼 Disney Resort. ~20 мин до парка."}, {"num": 4, "station": "disney", "action": "exit", "line": 11, "title": "ВЫХОД — Disney Resort", "station_cn": "迪士尼", "direction": null, "instruction": "Выход 1. ~10 мин пешком до входа Shanghai Disneyland. Билет заранее в приложении."}]}, {"name": "hotel_disney_metro__L2_1", "parentRoute": "hotel_disney_metro", "type": "metro", "line": 2, "color": "#82BF25", "dashArray": null, "weight": 6, "coords": [[31.230355, 121.523709], [31.231673, 121.521397], [31.231696, 121.521356], [31.231753, 121.521257], [31.231781, 121.521209], [31.231976, 121.520857], [31.232022, 121.520734], [31.232072, 121.520594], [31.232023, 121.520447], [31.231923, 121.520499], [31.231891, 121.52057], [31.231788, 121.520837], [31.231722, 121.521005], [31.231578, 121.521259], [31.23104, 121.522205], [31.229366, 121.525141], [31.229061, 121.525662], [31.228863, 121.525998], [31.22771, 121.528032], [31.226827, 121.529558], [31.226101, 121.530814], [31.226073, 121.530863], [31.226003, 121.530984], [31.225964, 121.531069], [31.225901, 121.531178], [31.224479, 121.533658], [31.224473, 121.533713], [31.224475, 121.53393], [31.224481, 121.534073], [31.224489, 121.534267], [31.224513, 121.53446], [31.224542, 121.534638], [31.2246, 121.534837], [31.224678, 121.535017], [31.224882, 121.535336], [31.224948, 121.535455], [31.225013, 121.535572], [31.225062, 121.535661], [31.225822, 121.537053], [31.226121, 121.537517], [31.226589, 121.538], [31.227248, 121.538876], [31.227348, 121.539025], [31.227477, 121.539229], [31.227753, 121.53969], [31.227949, 121.540039], [31.228175, 121.540506], [31.228265, 121.540703], [31.228355, 121.540916], [31.228485, 121.541213], [31.228838, 121.542188], [31.229277, 121.543442], [31.229494, 121.544088], [31.229744, 121.544806], [31.230032, 121.545661], [31.230312, 121.546492], [31.230498, 121.54706], [31.2306, 121.547374], [31.23078, 121.547884], [31.230966, 121.548349], [31.231206, 121.548857], [31.231558, 121.549576], [31.231737, 121.549928], [31.231977, 121.550402], [31.232125, 121.550684], [31.23222, 121.550857], [31.232543, 121.551513], [31.234736, 121.555931], [31.235369, 121.557176], [31.235619, 121.55766], [31.235812, 121.55806], [31.236021, 121.55854], [31.236306, 121.559193], [31.236393, 121.559383], [31.236711, 121.56012], [31.236893, 121.560518], [31.237625, 121.562122], [31.237771, 121.562424], [31.237802, 121.562489], [31.238012, 121.562925], [31.238179, 121.563231], [31.238309, 121.563479], [31.238629, 121.56413], [31.238922, 121.564717], [31.239312, 121.565513], [31.239727, 121.566242], [31.240323, 121.567333], [31.240749, 121.56809], [31.241191, 121.568932], [31.241338, 121.569208], [31.24191, 121.570469], [31.242322, 121.571375], [31.242872, 121.572662], [31.243409, 121.573862], [31.243977, 121.575082], [31.244487, 121.57621], [31.245158, 121.577716], [31.245399, 121.578252], [31.245656, 121.57881], [31.245868, 121.579223], [31.24608, 121.57963], [31.246408, 121.580184], [31.246918, 121.580993], [31.247657, 121.582139], [31.247981, 121.582655], [31.24832, 121.583149], [31.248779, 121.583839], [31.249077, 121.584381], [31.250308, 121.586362], [31.250401, 121.586564], [31.250462, 121.586757], [31.250507, 121.586986], [31.250518, 121.587188], [31.250505, 121.58738], [31.250462, 121.587583], [31.250386, 121.587808], [31.250258, 121.588104], [31.250067, 121.588396], [31.249855, 121.588679], [31.249376, 121.589299], [31.248818, 121.58989], [31.248295, 121.590453], [31.246544, 121.59215], [31.2463, 121.592312], [31.245835, 121.592747], [31.244851, 121.593648], [31.244166, 121.594211], [31.243716, 121.594537], [31.243313, 121.594823], [31.243167, 121.594927], [31.242848, 121.595147], [31.242681, 121.59533], [31.242624, 121.595372], [31.242507, 121.595457], [31.242387, 121.59559], [31.242294, 121.595656], [31.242266, 121.595677], [31.241117, 121.596636], [31.23986, 121.59775], [31.239792, 121.597826], [31.239698, 121.597944], [31.239637, 121.598033], [31.239599, 121.598088], [31.239501, 121.598246], [31.239226, 121.598555], [31.238903, 121.598955], [31.238796, 121.599125], [31.23878, 121.599119], [31.238713, 121.599099], [31.238568, 121.599091], [31.238431, 121.599094], [31.238235, 121.599192], [31.238085, 121.599322], [31.237707, 121.599635], [31.237335, 121.599919], [31.237028, 121.600129], [31.236765, 121.60029], [31.2367, 121.60033], [31.236334, 121.600522], [31.235942, 121.600686], [31.23563, 121.600804], [31.23533, 121.600907], [31.234919, 121.60102], [31.23459, 121.601085], [31.234465, 121.601108], [31.234267, 121.601136], [31.233855, 121.601166], [31.232002, 121.601318], [31.23191, 121.601327], [31.231372, 121.601379], [31.230885, 121.601437], [31.230307, 121.601527], [31.22987, 121.601611], [31.229667, 121.601658], [31.229282, 121.601747], [31.228988, 121.601819], [31.228698, 121.601899], [31.228329, 121.60201], [31.227962, 121.602135], [31.227275, 121.60238], [31.226679, 121.602596], [31.226301, 121.602734], [31.226252, 121.602751], [31.22562, 121.602979], [31.22492, 121.60323], [31.224593, 121.603348], [31.223651, 121.603688], [31.222528, 121.604099], [31.222232, 121.604195], [31.222174, 121.604213], [31.221978, 121.604276], [31.221776, 121.604342], [31.221708, 121.604364], [31.221555, 121.604415], [31.220978, 121.604628], [31.220857, 121.604682], [31.220716, 121.604762], [31.220601, 121.604817], [31.220518, 121.604848], [31.220398, 121.604421], [31.219706, 121.601951], [31.218365, 121.602445], [31.217883, 121.60262]], "distance_m": null, "duration_min": 55, "label": "Line 2: century_ave → guanglan", "cost_cny": null, "line_info": null, "route_label": "Метро: отель → Disney", "steps": null}, {"name": "hotel_disney_metro__L11_2", "parentRoute": "hotel_disney_metro", "type": "metro", "line": 11, "color": "#871C2B", "dashArray": null, "weight": 6, "coords": [[31.217883, 121.60262], [31.215592, 121.603451], [31.215237, 121.603596], [31.2153, 121.603883], [31.215838, 121.606342], [31.215865, 121.606463], [31.215883, 121.606544], [31.215344, 121.606741], [31.212531, 121.607775], [31.211645, 121.6081], [31.211028, 121.608326], [31.210757, 121.608426], [31.21033, 121.608585], [31.210114, 121.608676], [31.210045, 121.608708], [31.209864, 121.608804], [31.209667, 121.608914], [31.209475, 121.609036], [31.20929, 121.60916], [31.209105, 121.609296], [31.209009, 121.60937], [31.208867, 121.609486], [31.208667, 121.609664], [31.20856, 121.609764], [31.208478, 121.609851], [31.208357, 121.609985], [31.208092, 121.61026], [31.20759, 121.610783], [31.206763, 121.611643], [31.206362, 121.612059], [31.206122, 121.612304], [31.205822, 121.61262], [31.205637, 121.612813], [31.205467, 121.612991], [31.205182, 121.613284], [31.204659, 121.613816], [31.204268, 121.614233], [31.204053, 121.614444], [31.203705, 121.614801], [31.203552, 121.614966], [31.203518, 121.615003], [31.203383, 121.615149], [31.203036, 121.615506], [31.202861, 121.615696], [31.202722, 121.615854], [31.2026, 121.61598], [31.202417, 121.616164], [31.202302, 121.616289], [31.202216, 121.616383], [31.202025, 121.616591], [31.201882, 121.616758], [31.201864, 121.616689], [31.201832, 121.616572], [31.201343, 121.614801], [31.201283, 121.614601], [31.20116, 121.614196], [31.201101, 121.614021], [31.200994, 121.613779], [31.200883, 121.613795], [31.20091, 121.613957], [31.200955, 121.61416], [31.201146, 121.614921], [31.201356, 121.615674], [31.20208, 121.618349], [31.202666, 121.620485], [31.202703, 121.620621], [31.202246, 121.620544], [31.201727, 121.620406], [31.200921, 121.620284], [31.199377, 121.620022], [31.198414, 121.619872], [31.197826, 121.619768], [31.195885, 121.619653], [31.19143, 121.618876], [31.190835, 121.618678], [31.190403, 121.618562], [31.189187, 121.618367], [31.188833, 121.61832], [31.188572, 121.618286], [31.188123, 121.618195], [31.187548, 121.618021], [31.186943, 121.617807], [31.186597, 121.617694], [31.186391, 121.61763], [31.186118, 121.61758], [31.18596, 121.617563], [31.185767, 121.617545], [31.18555, 121.617523], [31.185286, 121.617531], [31.185088, 121.61754], [31.184862, 121.617563], [31.184624, 121.617602], [31.184289, 121.617649], [31.184053, 121.617674], [31.183824, 121.617702], [31.18358, 121.617696], [31.183307, 121.617682], [31.183017, 121.617682], [31.182485, 121.617621], [31.182035, 121.617549], [31.181478, 121.617478], [31.180933, 121.617397], [31.180624, 121.617359], [31.179621, 121.617205], [31.179057, 121.617135], [31.178792, 121.617103], [31.177995, 121.617016], [31.177576, 121.616963], [31.177247, 121.616931], [31.176017, 121.616789], [31.173883, 121.616704], [31.172665, 121.616678], [31.172133, 121.616683], [31.170301, 121.616854], [31.170039, 121.616877], [31.168775, 121.617053], [31.16741, 121.617321], [31.165913, 121.617679], [31.160572, 121.619134], [31.159732, 121.619387], [31.158943, 121.619701], [31.158729, 121.619786], [31.15738, 121.620406], [31.15596, 121.621204], [31.154914, 121.621895], [31.15382, 121.622686], [31.152537, 121.623765], [31.152291, 121.623972], [31.150991, 121.62527], [31.149595, 121.626726], [31.149425, 121.626904], [31.148151, 121.627967], [31.147137, 121.628715], [31.145848, 121.629551], [31.144845, 121.630146], [31.143653, 121.630713], [31.14298, 121.631032], [31.139574, 121.632511], [31.139266, 121.632657], [31.138972, 121.632809], [31.138722, 121.632946], [31.138481, 121.633085], [31.138363, 121.633161], [31.138245, 121.633242], [31.137856, 121.633546], [31.13757, 121.633803], [31.137367, 121.634014], [31.137167, 121.634224], [31.136991, 121.634428], [31.136799, 121.634664], [31.136626, 121.634904], [31.136463, 121.635144], [31.136444, 121.635173], [31.13633, 121.635347], [31.136254, 121.635474], [31.136125, 121.635721], [31.135988, 121.635995], [31.135861, 121.636269], [31.135744, 121.636555], [31.135653, 121.636802], [31.135549, 121.637115], [31.135456, 121.637441], [31.135385, 121.637707], [31.135324, 121.637986], [31.135274, 121.638255], [31.135236, 121.638519], [31.135202, 121.638763], [31.135177, 121.639004], [31.135153, 121.639275], [31.135137, 121.639546], [31.13513, 121.639732], [31.135131, 121.639924], [31.135147, 121.640315], [31.135248, 121.641192], [31.135933, 121.646296], [31.136219, 121.648533], [31.136313, 121.649265], [31.136396, 121.649793], [31.136483, 121.650274], [31.136561, 121.65062], [31.136644, 121.650958], [31.136733, 121.65128], [31.136826, 121.651577], [31.136925, 121.65186], [31.137033, 121.652137], [31.137148, 121.652412], [31.137273, 121.652688], [31.137403, 121.652947], [31.137551, 121.65322], [31.137699, 121.65347], [31.137861, 121.653725], [31.138026, 121.653965], [31.138379, 121.654428], [31.138439, 121.65451], [31.138528, 121.654648], [31.138692, 121.654867], [31.138799, 121.655017], [31.138886, 121.655153], [31.138956, 121.655292], [31.13902, 121.655399], [31.139092, 121.655459], [31.139123, 121.655579], [31.139178, 121.655686], [31.139253, 121.655775], [31.139343, 121.655841], [31.139445, 121.655879], [31.139552, 121.655888], [31.139638, 121.655874], [31.139719, 121.65584], [31.139794, 121.655789], [31.139859, 121.655722], [31.139911, 121.655641], [31.13995, 121.65555], [31.139972, 121.655452], [31.139978, 121.655351], [31.139967, 121.655251], [31.139939, 121.655154], [31.139896, 121.655066], [31.139915, 121.654916], [31.13995, 121.654781], [31.140037, 121.654596], [31.140263, 121.654178], [31.14054, 121.653666], [31.140941, 121.652949], [31.141045, 121.652758], [31.141148, 121.652577], [31.141334, 121.6523], [31.141452, 121.652159], [31.141558, 121.652037], [31.141598, 121.651991], [31.141795, 121.651778], [31.141848, 121.651721], [31.142052, 121.651536], [31.142285, 121.651332], [31.142528, 121.651139], [31.142612, 121.65108], [31.142627, 121.65107], [31.142707, 121.651021], [31.142794, 121.650967], [31.142997, 121.650842], [31.143019, 121.650828], [31.143206, 121.650724], [31.14328, 121.650688], [31.143617, 121.650531], [31.144029, 121.650355], [31.144352, 121.650225], [31.144384, 121.650213], [31.144605, 121.650134], [31.144606, 121.650315], [31.144649, 121.650444], [31.144681, 121.650546], [31.144683, 121.650682], [31.144652, 121.650774], [31.144597, 121.650862], [31.144567, 121.650911], [31.144483, 121.651047], [31.14457, 121.651126], [31.144753, 121.65129], [31.144785, 121.651327], [31.144878, 121.651433], [31.144964, 121.651873], [31.145003, 121.652046], [31.14515, 121.652001], [31.145308, 121.651934], [31.146574, 121.65143], [31.14666, 121.651393], [31.146745, 121.651385], [31.14685, 121.651438], [31.146896, 121.651497], [31.146953, 121.651569], [31.147406, 121.652143], [31.147922, 121.652797], [31.148282, 121.653244], [31.148747, 121.653822], [31.148761, 121.653839], [31.148918, 121.654034], [31.149065, 121.654197], [31.149182, 121.654328], [31.14923, 121.65464], [31.149281, 121.654978], [31.14924, 121.654991]], "distance_m": null, "duration_min": 55, "label": "Line 11: guanglan → disney", "cost_cny": null, "line_info": null, "route_label": "Метро: отель → Disney", "steps": null}];
+    const metroGuides = [{"num": 1, "station": "yangsi", "action": "board", "line": 6, "title": "Садимся — Yangsi", "station_cn": "杨思", "direction": "港城路 Gangcheng Road", "instruction": "Line 6 → Century Avenue.", "route_key": "hotel_disney_metro", "route_label": "Метро: отель → Disney", "lat": 31.157167, "lon": 121.496722, "action_color": "#27ae60", "action_icon": "▶", "action_label": "Сесть", "line_colors": ["#D40068"]}, {"num": 2, "station": "century_ave", "action": "transfer", "lines": [6, 2], "title": "ПЕРЕСАДКА — Century Avenue", "station_cn": "世纪大道", "direction": "徐泾东 East Xujing", "instruction": "Пересадка на Line 2 → Guanglan Road.", "route_key": "hotel_disney_metro", "route_label": "Метро: отель → Disney", "lat": 31.230397, "lon": 121.523742, "action_color": "#e67e22", "action_icon": "⇄", "action_label": "Пересадка", "line_colors": ["#D40068", "#82BF25"]}, {"num": 3, "station": "guanglan", "action": "transfer", "lines": [2, 11], "title": "ПЕРЕСАДКА — Guanglan Road", "station_cn": "广兰路", "direction": "迪士尼 Disney Resort", "instruction": "⚠️ Пересадка на Line 11 (бордовая)! Следуйте 11号线 → 迪士尼 Disney Resort. ~20 мин до парка.", "route_key": "hotel_disney_metro", "route_label": "Метро: отель → Disney", "lat": 31.217556, "lon": 121.601389, "action_color": "#e67e22", "action_icon": "⇄", "action_label": "Пересадка", "line_colors": ["#82BF25", "#871C2B"]}, {"num": 4, "station": "disney", "action": "exit", "line": 11, "title": "ВЫХОД — Disney Resort", "station_cn": "迪士尼", "direction": null, "instruction": "Выход 1. ~10 мин пешком до входа Shanghai Disneyland. Билет заранее в приложении.", "route_key": "hotel_disney_metro", "route_label": "Метро: отель → Disney", "lat": 31.1462523, "lon": 121.6562825, "action_color": "#2980b9", "action_icon": "↗", "action_label": "Выход", "line_colors": ["#871C2B"]}];
+    const metroLineColors = {"1": "#E3002B", "2": "#82BF25", "3": "#FCD600", "4": "#461D84", "5": "#944D9A", "6": "#D40068", "7": "#ED6F00", "8": "#0094D8", "9": "#87CAED", "10": "#C6AFD4", "11": "#871C2B", "12": "#007A60", "13": "#E999C0"};
+    const center = [31.17074165, 121.5449941];
+    const zoom = 11;
+
+    const typeIcon = { walk: '🚶', metro: '🚇', taxi: '🚕' };
+    const typeLabel = { walk: 'Пешком', metro: 'Метро', taxi: 'Такси' };
+
+    function loadDoneRoutes() {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+      } catch (e) { return {}; }
+    }
+
+    function saveDoneRoutes(done) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(done));
+    }
+
+    // Абсолютные URL — иначе в Obsidian iframe (Embed HTML) иконки маркеров пустые
+    delete L.Icon.Default.prototype._getIconUrl;
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    });
+
+    const map = L.map('map', { preferCanvas: false }).setView(center, zoom);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap', updateWhenIdle: false
+    }).addTo(map);
+
+    const hotelMarker = markers.find(m => m.id === 'hotel');
+    if (hotelMarker) {
+      L.circleMarker([hotelMarker.lat, hotelMarker.lon], {
+        radius: 10, color: '#c0392b', fillColor: '#e74c3c', fillOpacity: 0.9, weight: 2
+      }).addTo(map).bindPopup('<b>Отель</b><br>上南路3090号');
+    }
+
+    markers.forEach(m => {
+      L.marker([m.lat, m.lon]).addTo(map).bindPopup(`<b>${m.title}</b><br>${m.desc}`);
+    });
+
+    const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lon]));
+    const routeLayers = {};
+    const stepMarkerLayers = {};
+    let doneRoutes = loadDoneRoutes();
+    const doneStepsKey = STORAGE_KEY + '-steps';
+    let doneSteps = (() => { try { return JSON.parse(localStorage.getItem(doneStepsKey) || '{}'); } catch(e) { return {}; } })();
+
+    function saveDoneSteps() { localStorage.setItem(doneStepsKey, JSON.stringify(doneSteps)); }
+
+    function stepPopup(s) {
+      const lines = (s.lines || (s.line ? [s.line] : [])).map(ln =>
+        `<span style="background:${metroLineColors[ln]||'#999'};color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;margin-right:3px">L${ln}</span>`
+      ).join('');
+      let html = `<b>${s.num}. ${s.title}</b><br><small>${s.station_cn}</small>`;
+      html += `<br><span style="color:${s.action_color};font-weight:600">${s.action_label}</span>`;
+      if (lines) html += `<br>${lines}`;
+      if (s.direction) html += `<br>→ <b>${s.direction}</b>`;
+      html += `<hr style="margin:6px 0"><div style="max-width:260px;line-height:1.4">${s.instruction}</div>`;
+      html += `<br><button onclick="markStepDone('${s.route_key}',${s.num})" style="cursor:pointer;margin-top:4px">✓ Шаг пройден</button>`;
+      return html;
+    }
+
+    metroGuides.forEach(s => {
+      const isTransfer = s.action === 'transfer';
+      const size = isTransfer ? 30 : 24;
+      const icon = L.divIcon({
+        className: '',
+        html: `<div style="background:${s.action_color};color:#fff;width:${size}px;height:${size}px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:${isTransfer?13:12}px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35)">${s.num}</div>`,
+        iconSize: [size, size], iconAnchor: [size/2, size/2]
+      });
+      const m = L.marker([s.lat, s.lon], { icon, zIndexOffset: 1000 + s.num })
+        .bindPopup(stepPopup(s));
+      if (!stepMarkerLayers[s.route_key]) stepMarkerLayers[s.route_key] = [];
+      stepMarkerLayers[s.route_key].push(m);
+    });
+
+    window.markStepDone = function(routeKey, num) {
+      doneSteps[routeKey + '-' + num] = true;
+      saveDoneSteps();
+      applyRouteVisibility();
+      map.closePopup();
+    };
+
+    polylines.forEach(p => {
+      const parent = p.parentRoute || p.name;
+      const line = L.polyline(p.coords, {
+        color: p.color, weight: p.weight, opacity: 0.92, dashArray: p.dashArray
+      });
+      bounds.extend(line.getBounds());
+      let popup = `<b>${p.line ? 'Line ' + p.line : (typeIcon[p.type] || '')} ${p.label}</b>`;
+      if (p.route_label && p.line) popup = `<b>Line ${p.line}</b> · ${p.route_label}<br><small>${p.label}</small>`;
+      if (p.duration_min && !p.line) popup += `<br>~${p.duration_min} мин`;
+      if (p.distance_m) popup += `<br>${p.distance_m} м`;
+      if (p.cost_cny) popup += `<br>~¥${p.cost_cny}`;
+      if (p.line_info) popup += `<br><small>${p.line_info}</small>`;
+      popup += `<br><br><button onclick="markRouteDone('${parent}')" style="cursor:pointer">✓ Отметить пройденным</button>`;
+      line.bindPopup(popup);
+      if (!routeLayers[parent]) routeLayers[parent] = [];
+      routeLayers[parent].push(line);
+    });
+
+    function applyRouteVisibility() {
+      Object.entries(routeLayers).forEach(([parent, lines]) => {
+        lines.forEach(line => {
+          if (doneRoutes[parent]) {
+            if (map.hasLayer(line)) map.removeLayer(line);
+          } else {
+            if (!map.hasLayer(line)) line.addTo(map);
+          }
+        });
+      });
+      Object.entries(stepMarkerLayers).forEach(([parent, markers]) => {
+        markers.forEach(m => {
+          if (doneRoutes[parent]) {
+            if (map.hasLayer(m)) map.removeLayer(m);
+          } else {
+            if (!map.hasLayer(m)) m.addTo(map);
+          }
+        });
+      });
+      renderRouteList();
+    }
+
+    window.markRouteDone = function(parent) {
+      doneRoutes[parent] = true;
+      saveDoneRoutes(doneRoutes);
+      applyRouteVisibility();
+      map.closePopup();
+    };
+
+    function renderRouteList() {
+      const list = document.getElementById('routeList');
+      list.innerHTML = '';
+      const parents = [...new Set(polylines.map(p => p.parentRoute || p.name))];
+      parents.forEach(parent => {
+        const segs = polylines.filter(p => (p.parentRoute || p.name) === parent);
+        const p = segs[0];
+        const isDone = !!doneRoutes[parent];
+        const item = document.createElement('label');
+        item.className = 'route-item' + (isDone ? ' done' : '');
+        const meta = [
+          typeLabel[p.type] || p.type,
+          p.duration_min ? '~' + p.duration_min + ' мин' : '',
+          p.cost_cny ? '¥' + p.cost_cny : ''
+        ].filter(Boolean).join(' · ');
+        const lineBadges = segs.filter(s => s.line).map(s =>
+          `<span class="line-badge" style="background:${s.color}">L${s.line}</span>`
+        ).join('');
+        const swatch = p.type === 'metro' && segs.length > 1
+          ? segs.map(s => `<span class="route-swatch" style="background:${s.color};width:10px;height:10px;display:inline-block;border-radius:2px;margin-right:2px"></span>`).join('')
+          : `<span class="route-swatch" style="background:${p.color};width:14px;height:14px;display:inline-block;border-radius:3px"></span>`;
+
+        const stepsForRoute = metroGuides.filter(g => g.route_key === parent);
+        let stepsHtml = '';
+        if (stepsForRoute.length) {
+          stepsHtml = '<ol class="metro-steps">' + stepsForRoute.map(s => {
+            const stepDone = doneSteps[s.route_key + '-' + s.num];
+            const cls = (s.action === 'transfer' ? 'transfer' : '') + (stepDone ? ' done-step' : '');
+            const lineTag = (s.lines || (s.line ? [s.line] : [])).map(ln =>
+              `<span class="line-badge" style="background:${metroLineColors[ln]}">L${ln}</span>`
+            ).join(' ');
+            return `<li class="${cls}"><span class="step-num">${s.num}.</span>`
+              + `<span class="step-action" style="color:${s.action_color}">${s.action_label}</span> `
+              + `<b>${s.title}</b> ${lineTag}`
+              + (s.direction ? `<br><small>→ ${s.direction}</small>` : '')
+              + `<br><small>${s.instruction.substring(0, 120)}${s.instruction.length>120?'…':''}</small></li>`;
+          }).join('') + '</ol>';
+        }
+
+        item.innerHTML = `
+          <input type="checkbox" ${isDone ? 'checked' : ''} data-route="${parent}" title="Скрыть пройденный маршрут">
+          <div style="display:flex;gap:2px;flex-wrap:wrap;margin-top:2px">${swatch}</div>
+          <div style="flex:1">
+            <div class="route-label">${typeIcon[p.type] || ''} ${p.route_label || p.label}</div>
+            <div class="route-meta">${meta}</div>
+            ${lineBadges ? '<div class="line-badges">' + lineBadges + '</div>' : ''}
+            ${stepsHtml}
+          </div>`;
+        list.appendChild(item);
+      });
+
+      list.querySelectorAll('input[type=checkbox]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const name = cb.dataset.route;
+          if (cb.checked) doneRoutes[name] = true;
+          else delete doneRoutes[name];
+          saveDoneRoutes(doneRoutes);
+          applyRouteVisibility();
+        });
+      });
+    }
+
+    document.getElementById('showAllBtn').addEventListener('click', () => {
+      doneRoutes = {};
+      saveDoneRoutes(doneRoutes);
+      applyRouteVisibility();
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      if (confirm('Сбросить все отметки пройденных маршрутов и шагов?')) {
+        doneRoutes = {};
+        doneSteps = {};
+        saveDoneRoutes(doneRoutes);
+        saveDoneSteps();
+        applyRouteVisibility();
+      }
+    });
+
+    document.getElementById('togglePanel').addEventListener('click', (e) => {
+      const panel = document.getElementById('routePanel');
+      const collapsed = panel.classList.toggle('collapsed');
+      e.target.textContent = collapsed ? '+' : '−';
+    });
+
+    // На телефоне панель по умолчанию свёрнута — больше места для карты
+    if (window.matchMedia('(max-width: 480px)').matches) {
+      const panel = document.getElementById('routePanel');
+      panel.classList.add('collapsed');
+      document.getElementById('togglePanel').textContent = '+';
+    }
+
+    applyRouteVisibility();
+
+    const fitMap = () => map.fitBounds(bounds.pad(0.1), { animate: false, padding: [20, 20] });
+    const refreshMapSize = () => {
+      map.invalidateSize({ animate: false, pan: false });
+      fitMap();
+    };
+    refreshMapSize();
+
+    // Embed HTML / iframe: размер контейнера приходит позже — без этого серые «дыры» в тайлах
+    if (window.self !== window.top) {
+      [50, 150, 400, 1000].forEach(ms => setTimeout(refreshMapSize, ms));
+      if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(() => refreshMapSize()).observe(document.getElementById('map'));
+      }
+    }
+    window.addEventListener('resize', refreshMapSize);
+
+    // В Obsidian (iframe): сначала клик — потом зум колёсиком, иначе скроллится заметка
+    if (window.self !== window.top) {
+      map.scrollWheelZoom.disable();
+      const hint = L.control({ position: 'topright' });
+      hint.onAdd = function() {
+        const d = L.DomUtil.create('div', 'legend');
+        d.id = 'mapHint';
+        d.innerHTML = '<b>Кликните по карте</b><br>затем тяните пальцем/мышью<br>колёсико = зум';
+        return d;
+      };
+      hint.addTo(map);
+      map.once('click', () => {
+        map.scrollWheelZoom.enable();
+        const h = document.getElementById('mapHint');
+        if (h) h.parentElement.parentElement.remove();
+      });
+    }
+
+    const legend = L.control({ position: 'bottomright' });
+    legend.onAdd = function() {
+      const div = L.DomUtil.create('div', 'legend');
+      div.innerHTML = '<b>Типы линий</b><br>'
+        + '<i style="background:#2980b9"></i>Пешком<br>'
+        + '<i style="background:#f39c12"></i>Такси<br>'
+        + '<b>Метро Шанхая</b><br>'
+        + "<i style=\"background:#82BF25\"></i>Line 2<br><i style=\"background:#D40068\"></i>Line 6<br><i style=\"background:#871C2B\"></i>Line 11<br>"
+        + '<span style="color:#e74c3c">●</span> Отель<br>'
+        + '<small>①②③ — шаги метро<br>'
+        + '<span style="color:#e67e22">●</span> оранжевый = пересадка</small>';
+      return div;
+    };
+    legend.addTo(map);
+  </script>
+</body>
+</html>

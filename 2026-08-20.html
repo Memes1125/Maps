@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>20 августа — Французская концессия + подготовка к TI</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .legend { background: #fff; padding: 10px 12px; line-height: 1.6; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.2); font-size: 13px; }
+    .legend i { display: inline-block; width: 20px; height: 4px; margin-right: 6px; vertical-align: middle; }
+    .route-panel {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      background: #fff; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.18);
+      width: min(340px, calc(100vw - 24px)); max-height: calc(100vh - 24px);
+      display: flex; flex-direction: column; font-size: 13px;
+    }
+    .route-panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; border-bottom: 1px solid #eee; font-weight: 600;
+    }
+    .route-panel-actions { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid #eee; }
+    .route-panel-actions button {
+      border: 1px solid #ddd; background: #f8f8f8; border-radius: 6px;
+      padding: 4px 8px; font-size: 12px; cursor: pointer;
+    }
+    .route-panel-actions button:hover { background: #eee; }
+    .route-list { overflow-y: auto; padding: 6px 0; }
+    .route-item {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 8px 12px; border-bottom: 1px solid #f3f3f3;
+    }
+    .route-item:last-child { border-bottom: none; }
+    .route-item.done { opacity: 0.55; }
+    .route-item.done .route-label { text-decoration: line-through; color: #888; }
+    .route-swatch { width: 14px; height: 14px; border-radius: 3px; margin-top: 2px; flex-shrink: 0; }
+    .route-swatch.dashed {
+      background: repeating-linear-gradient(90deg, var(--c) 0 5px, transparent 5px 9px);
+      height: 4px; margin-top: 7px;
+    }
+    .route-meta { font-size: 11px; color: #666; margin-top: 2px; }
+    .route-label { font-weight: 500; line-height: 1.3; }
+    .route-item input { margin-top: 3px; cursor: pointer; flex-shrink: 0; }
+    .line-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+    .line-badge { font-size: 10px; font-weight: 700; color: #fff; padding: 1px 5px; border-radius: 3px; }
+    .metro-steps { margin: 6px 0 0 28px; padding: 0; list-style: none; font-size: 11px; color: #444; }
+    .metro-steps li { margin-bottom: 6px; padding-left: 4px; border-left: 3px solid #ddd; padding-bottom: 4px; }
+    .metro-steps li.transfer { border-left-color: #e67e22; background: #fff8f0; margin-left: -4px; padding: 4px 4px 4px 8px; border-radius: 0 4px 4px 0; }
+    .metro-steps li.done-step { opacity: 0.45; text-decoration: line-through; }
+    .step-num { font-weight: 700; margin-right: 4px; }
+    .step-action { font-size: 10px; font-weight: 600; text-transform: uppercase; }
+    .route-panel.collapsed .route-list,
+    .route-panel.collapsed .route-panel-actions { display: none; }
+    @media (max-width: 480px) {
+      .route-panel { width: calc(100vw - 16px); left: 8px; top: 8px; max-height: 45vh; }
+      .route-panel-actions button { padding: 6px 10px; font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="route-panel" id="routePanel">
+    <div class="route-panel-header">
+      <span>Пройденные маршруты</span>
+      <button type="button" id="togglePanel" title="Свернуть">−</button>
+    </div>
+    <div class="route-panel-actions">
+      <button type="button" id="showAllBtn">Показать все</button>
+      <button type="button" id="resetBtn">Сбросить</button>
+    </div>
+    <div class="route-list" id="routeList"></div>
+  </div>
+  <script>
+    const STORAGE_KEY = "shanghai-trip-2026-08-20";
+    const markers = [{"id": "hotel", "lat": 31.1491503, "lon": 121.5032299, "title": "Отель", "desc": "Shanshui Hotel · 上南路3090号"}, {"id": "wukang_road", "lat": 31.2075, "lon": 121.443, "title": "Укан Lu", "desc": "武康路 · French Concession"}, {"id": "tianzifang", "lat": 31.21034, "lon": 121.4641036, "title": "Арт-квартал", "desc": "田子坊 Tianzifang · галереи"}, {"id": "m50_art", "lat": 31.2489, "lon": 121.4498, "title": "M50 Art", "desc": "莫干山路50号 · contemporary art"}, {"id": "expo", "lat": 31.1864842, "lon": 121.4899264, "title": "Экспо", "desc": "China Art Museum · 中华艺术宫"}];
+    const polylines = [{"name": "hotel_tianzifang_walk", "parentRoute": "hotel_tianzifang_walk", "type": "walk", "line": null, "color": "#2980b9", "dashArray": null, "weight": 4, "coords": [[31.14915, 121.50323], [31.149528, 121.502946], [31.149721, 121.5028], [31.149997, 121.502593], [31.15041, 121.502378], [31.150699, 121.502257], [31.151063, 121.502102], [31.151573, 121.501917], [31.152112, 121.501676], [31.152396, 121.501542], [31.152868, 121.5013], [31.153257, 121.50101], [31.153546, 121.500729], [31.154073, 121.500087], [31.154463, 121.499521], [31.154956, 121.49884], [31.155203, 121.498534], [31.15541, 121.498269], [31.155941, 121.49784], [31.15625, 121.497642], [31.156349, 121.497596], [31.156987, 121.497218], [31.157719, 121.496778], [31.158527, 121.496295], [31.159132, 121.495791], [31.159895, 121.495024], [31.160196, 121.494777], [31.160581, 121.494512], [31.161042, 121.494248], [31.161359, 121.494089], [31.161644, 121.493977], [31.162828, 121.493529], [31.163301, 121.493366], [31.163466, 121.493313], [31.164331, 121.493103], [31.164742, 121.493023], [31.165307, 121.492977], [31.165628, 121.492944], [31.166271, 121.492893], [31.1668, 121.492849], [31.167787, 121.492758], [31.16833, 121.492719], [31.169392, 121.492696], [31.170237, 121.49264], [31.170504, 121.492605], [31.170976, 121.492495], [31.171824, 121.492203], [31.172371, 121.492055], [31.173222, 121.491793], [31.173323, 121.491763], [31.173439, 121.491725], [31.173418, 121.491507], [31.173114, 121.488285], [31.173001, 121.487005], [31.172885, 121.485911], [31.172724, 121.484755], [31.172652, 121.484358], [31.172733, 121.484344], [31.172826, 121.484327], [31.173327, 121.484215], [31.17383, 121.484094], [31.17408, 121.484029], [31.174333, 121.483963], [31.174813, 121.483838], [31.175002, 121.483783], [31.175199, 121.483722], [31.176259, 121.48336], [31.176307, 121.483344], [31.177244, 121.483023], [31.177379, 121.483054], [31.177504, 121.482953], [31.177724, 121.482792], [31.177743, 121.482701], [31.178688, 121.482067], [31.179357, 121.481614], [31.179492, 121.481501], [31.179653, 121.481353], [31.179804, 121.481187], [31.18002, 121.480928], [31.181674, 121.47725], [31.181977, 121.47666], [31.182289, 121.476112], [31.182629, 121.475694], [31.182913, 121.475458], [31.183179, 121.475233], [31.183537, 121.474964], [31.183996, 121.474675], [31.185948, 121.473882], [31.187366, 121.473305], [31.191017, 121.47187], [31.192715, 121.471129], [31.194469, 121.470576], [31.19613, 121.470072], [31.196332, 121.469975], [31.196515, 121.469868], [31.196643, 121.469735], [31.196742, 121.469577], [31.196806, 121.469415], [31.196842, 121.469221], [31.196875, 121.468924], [31.196874, 121.46875], [31.196855, 121.468576], [31.196642, 121.467612], [31.196654, 121.467401], [31.196721, 121.467204], [31.196809, 121.467102], [31.196909, 121.467024], [31.197099, 121.46692], [31.197362, 121.466793], [31.196765, 121.465467], [31.197905, 121.465285], [31.198634, 121.465077], [31.199161, 121.464873], [31.199489, 121.464723], [31.199783, 121.464546], [31.199996, 121.464447], [31.200506, 121.46424], [31.200879, 121.464112], [31.201391, 121.463919], [31.202483, 121.463651], [31.202725, 121.463612], [31.203144, 121.463544], [31.203751, 121.463376], [31.204511, 121.46316], [31.20496, 121.463012], [31.205118, 121.462953], [31.205501, 121.462802], [31.206117, 121.462518], [31.206424, 121.462372], [31.206853, 121.462906], [31.206926, 121.462961], [31.207074, 121.462964], [31.207219, 121.462948], [31.207465, 121.462908], [31.207552, 121.462888], [31.208084, 121.462765], [31.209151, 121.462465], [31.209167, 121.462541], [31.209364, 121.463539], [31.209421, 121.463827], [31.209542, 121.464321], [31.20967, 121.464843], [31.20975, 121.465171], [31.210446, 121.464906]], "distance_m": 9119, "duration_min": 11, "label": "Пешком: отель → Tianzifang", "cost_cny": null, "line_info": null, "route_label": "Пешком: отель → Tianzifang"}, {"name": "tianzifang_m50_walk", "parentRoute": "tianzifang_m50_walk", "type": "walk", "line": null, "color": "#2980b9", "dashArray": null, "weight": 4, "coords": [[31.210446, 121.464906], [31.20975, 121.465171], [31.20981, 121.465415], [31.209865, 121.465639], [31.209926, 121.465888], [31.210143, 121.466778], [31.21024, 121.467173], [31.210174, 121.467236], [31.210123, 121.467278], [31.209949, 121.467248], [31.209827, 121.467177], [31.209749, 121.467131], [31.209544, 121.46703], [31.209024, 121.46686], [31.208483, 121.466662], [31.208128, 121.466573], [31.207984, 121.466482], [31.207864, 121.466344], [31.207756, 121.46615], [31.2076, 121.465311], [31.20758, 121.465202], [31.207557, 121.465077], [31.207347, 121.465148], [31.207394, 121.465372], [31.207485, 121.465799], [31.20755, 121.466084], [31.207627, 121.466342], [31.207719, 121.466536], [31.207833, 121.466674], [31.207955, 121.466771], [31.208134, 121.466831], [31.208429, 121.466856], [31.209177, 121.467113], [31.209699, 121.467326], [31.209908, 121.467483], [31.210081, 121.467671], [31.210257, 121.467981], [31.210405, 121.468458], [31.21044, 121.468507], [31.210515, 121.468571], [31.210636, 121.468631], [31.210785, 121.468677], [31.21089, 121.468688], [31.211002, 121.468648], [31.211027, 121.468638], [31.211677, 121.468342], [31.212263, 121.467969], [31.212864, 121.467575], [31.213688, 121.467019], [31.213914, 121.466844], [31.214132, 121.466664], [31.214833, 121.466229], [31.215254, 121.466055], [31.21567, 121.466002], [31.216211, 121.465996], [31.217142, 121.466185], [31.218568, 121.466556], [31.220237, 121.467055], [31.220384, 121.467105], [31.221064, 121.46726], [31.221809, 121.467377], [31.222, 121.467385], [31.222199, 121.467378], [31.222453, 121.467355], [31.222658, 121.467323], [31.222842, 121.467281], [31.223033, 121.467227], [31.223367, 121.467128], [31.22375, 121.466963], [31.224041, 121.466817], [31.224343, 121.466644], [31.22455, 121.466507], [31.22483, 121.466285], [31.225294, 121.465809], [31.225703, 121.46538], [31.226214, 121.464841], [31.226611, 121.464444], [31.227021, 121.464004], [31.227357, 121.463692], [31.227647, 121.463446], [31.228099, 121.463163], [31.228396, 121.463008], [31.228735, 121.462887], [31.229157, 121.462766], [31.229551, 121.462712], [31.229839, 121.4627], [31.232885, 121.462497], [31.233159, 121.462572], [31.233592, 121.462525], [31.234266, 121.46239], [31.235276, 121.462193], [31.236003, 121.462007], [31.236404, 121.461888], [31.236649, 121.461815], [31.236933, 121.461693], [31.238382, 121.460874], [31.238725, 121.46067], [31.239594, 121.460234], [31.240039, 121.46], [31.240289, 121.45989], [31.240476, 121.459808], [31.24083, 121.459649], [31.241605, 121.459318], [31.241946, 121.459179], [31.242134, 121.459128], [31.242327, 121.459085], [31.242774, 121.459002], [31.243011, 121.458932], [31.243183, 121.458861], [31.243632, 121.458669], [31.244054, 121.45845], [31.244138, 121.45841], [31.244321, 121.458323], [31.244564, 121.458205], [31.244831, 121.458095], [31.244964, 121.458046], [31.24507, 121.458006], [31.245256, 121.45796], [31.24554, 121.45791], [31.245645, 121.457901], [31.245723, 121.457894], [31.246128, 121.457907], [31.246422, 121.457961], [31.246575, 121.457984], [31.246742, 121.458036], [31.246905, 121.458101], [31.247056, 121.458116], [31.247205, 121.457666], [31.247487, 121.456778], [31.247662, 121.456295], [31.247857, 121.455759], [31.247912, 121.455569], [31.247958, 121.455334], [31.24799, 121.455165], [31.248008, 121.455008], [31.248014, 121.454899], [31.248027, 121.454682], [31.248039, 121.454326], [31.248049, 121.453495], [31.248049, 121.453141], [31.248056, 121.45274], [31.248017, 121.451323], [31.248371, 121.451216], [31.248595, 121.451148], [31.24888, 121.451062], [31.248908, 121.451015], [31.248972, 121.450908], [31.249032, 121.450752], [31.249074, 121.450645], [31.249316, 121.45002]], "distance_m": 6471, "duration_min": 8, "label": "Пешком: Tianzifang → M50 art quarter", "cost_cny": null, "line_info": null, "route_label": "Пешком: Tianzifang → M50 art quarter"}, {"name": "hotel_expo_walk", "parentRoute": "hotel_expo_walk", "type": "walk", "line": null, "color": "#2980b9", "dashArray": null, "weight": 4, "coords": [[31.14915, 121.50323], [31.149528, 121.502946], [31.149721, 121.5028], [31.149997, 121.502593], [31.15041, 121.502378], [31.150699, 121.502257], [31.151063, 121.502102], [31.151573, 121.501917], [31.152112, 121.501676], [31.152396, 121.501542], [31.152868, 121.5013], [31.153257, 121.50101], [31.153546, 121.500729], [31.154073, 121.500087], [31.154463, 121.499521], [31.154956, 121.49884], [31.155203, 121.498534], [31.15541, 121.498269], [31.155941, 121.49784], [31.15625, 121.497642], [31.156349, 121.497596], [31.156987, 121.497218], [31.157719, 121.496778], [31.158527, 121.496295], [31.159132, 121.495791], [31.159895, 121.495024], [31.160196, 121.494777], [31.160581, 121.494512], [31.161042, 121.494248], [31.161359, 121.494089], [31.161644, 121.493977], [31.162828, 121.493529], [31.163301, 121.493366], [31.163466, 121.493313], [31.164331, 121.493103], [31.164742, 121.493023], [31.165307, 121.492977], [31.165628, 121.492944], [31.166271, 121.492893], [31.1668, 121.492849], [31.167787, 121.492758], [31.16833, 121.492719], [31.169392, 121.492696], [31.170237, 121.49264], [31.170504, 121.492605], [31.170976, 121.492495], [31.171824, 121.492203], [31.172371, 121.492055], [31.173222, 121.491793], [31.173323, 121.491763], [31.173439, 121.491725], [31.173811, 121.491613], [31.174147, 121.491499], [31.174757, 121.491333], [31.175579, 121.491194], [31.175905, 121.491137], [31.176405, 121.491129], [31.177991, 121.490824], [31.179129, 121.490574], [31.179691, 121.490442], [31.18047, 121.490274], [31.180595, 121.490238], [31.183088, 121.489667], [31.18373, 121.489523], [31.184339, 121.489373], [31.186318, 121.488925]], "distance_m": 4453, "duration_min": 5, "label": "Пешком: отель → China Art Museum", "cost_cny": null, "line_info": null, "route_label": "Пешком: отель → China Art Museum"}];
+    const metroGuides = [];
+    const metroLineColors = {"1": "#E3002B", "2": "#82BF25", "3": "#FCD600", "4": "#461D84", "5": "#944D9A", "6": "#D40068", "7": "#ED6F00", "8": "#0094D8", "9": "#87CAED", "10": "#C6AFD4", "11": "#871C2B", "12": "#007A60", "13": "#E999C0"};
+    const center = [31.2004749, 121.47001198000001];
+    const zoom = 12;
+
+    const typeIcon = { walk: '🚶', metro: '🚇', taxi: '🚕' };
+    const typeLabel = { walk: 'Пешком', metro: 'Метро', taxi: 'Такси' };
+
+    function loadDoneRoutes() {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+      } catch (e) { return {}; }
+    }
+
+    function saveDoneRoutes(done) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(done));
+    }
+
+    // Абсолютные URL — иначе в Obsidian iframe (Embed HTML) иконки маркеров пустые
+    delete L.Icon.Default.prototype._getIconUrl;
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    });
+
+    const map = L.map('map', { preferCanvas: false }).setView(center, zoom);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap', updateWhenIdle: false
+    }).addTo(map);
+
+    const hotelMarker = markers.find(m => m.id === 'hotel');
+    if (hotelMarker) {
+      L.circleMarker([hotelMarker.lat, hotelMarker.lon], {
+        radius: 10, color: '#c0392b', fillColor: '#e74c3c', fillOpacity: 0.9, weight: 2
+      }).addTo(map).bindPopup('<b>Отель</b><br>上南路3090号');
+    }
+
+    markers.forEach(m => {
+      L.marker([m.lat, m.lon]).addTo(map).bindPopup(`<b>${m.title}</b><br>${m.desc}`);
+    });
+
+    const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lon]));
+    const routeLayers = {};
+    const stepMarkerLayers = {};
+    let doneRoutes = loadDoneRoutes();
+    const doneStepsKey = STORAGE_KEY + '-steps';
+    let doneSteps = (() => { try { return JSON.parse(localStorage.getItem(doneStepsKey) || '{}'); } catch(e) { return {}; } })();
+
+    function saveDoneSteps() { localStorage.setItem(doneStepsKey, JSON.stringify(doneSteps)); }
+
+    function stepPopup(s) {
+      const lines = (s.lines || (s.line ? [s.line] : [])).map(ln =>
+        `<span style="background:${metroLineColors[ln]||'#999'};color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;margin-right:3px">L${ln}</span>`
+      ).join('');
+      let html = `<b>${s.num}. ${s.title}</b><br><small>${s.station_cn}</small>`;
+      html += `<br><span style="color:${s.action_color};font-weight:600">${s.action_label}</span>`;
+      if (lines) html += `<br>${lines}`;
+      if (s.direction) html += `<br>→ <b>${s.direction}</b>`;
+      html += `<hr style="margin:6px 0"><div style="max-width:260px;line-height:1.4">${s.instruction}</div>`;
+      html += `<br><button onclick="markStepDone('${s.route_key}',${s.num})" style="cursor:pointer;margin-top:4px">✓ Шаг пройден</button>`;
+      return html;
+    }
+
+    metroGuides.forEach(s => {
+      const isTransfer = s.action === 'transfer';
+      const size = isTransfer ? 30 : 24;
+      const icon = L.divIcon({
+        className: '',
+        html: `<div style="background:${s.action_color};color:#fff;width:${size}px;height:${size}px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:${isTransfer?13:12}px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35)">${s.num}</div>`,
+        iconSize: [size, size], iconAnchor: [size/2, size/2]
+      });
+      const m = L.marker([s.lat, s.lon], { icon, zIndexOffset: 1000 + s.num })
+        .bindPopup(stepPopup(s));
+      if (!stepMarkerLayers[s.route_key]) stepMarkerLayers[s.route_key] = [];
+      stepMarkerLayers[s.route_key].push(m);
+    });
+
+    window.markStepDone = function(routeKey, num) {
+      doneSteps[routeKey + '-' + num] = true;
+      saveDoneSteps();
+      applyRouteVisibility();
+      map.closePopup();
+    };
+
+    polylines.forEach(p => {
+      const parent = p.parentRoute || p.name;
+      const line = L.polyline(p.coords, {
+        color: p.color, weight: p.weight, opacity: 0.92, dashArray: p.dashArray
+      });
+      bounds.extend(line.getBounds());
+      let popup = `<b>${p.line ? 'Line ' + p.line : (typeIcon[p.type] || '')} ${p.label}</b>`;
+      if (p.route_label && p.line) popup = `<b>Line ${p.line}</b> · ${p.route_label}<br><small>${p.label}</small>`;
+      if (p.duration_min && !p.line) popup += `<br>~${p.duration_min} мин`;
+      if (p.distance_m) popup += `<br>${p.distance_m} м`;
+      if (p.cost_cny) popup += `<br>~¥${p.cost_cny}`;
+      if (p.line_info) popup += `<br><small>${p.line_info}</small>`;
+      popup += `<br><br><button onclick="markRouteDone('${parent}')" style="cursor:pointer">✓ Отметить пройденным</button>`;
+      line.bindPopup(popup);
+      if (!routeLayers[parent]) routeLayers[parent] = [];
+      routeLayers[parent].push(line);
+    });
+
+    function applyRouteVisibility() {
+      Object.entries(routeLayers).forEach(([parent, lines]) => {
+        lines.forEach(line => {
+          if (doneRoutes[parent]) {
+            if (map.hasLayer(line)) map.removeLayer(line);
+          } else {
+            if (!map.hasLayer(line)) line.addTo(map);
+          }
+        });
+      });
+      Object.entries(stepMarkerLayers).forEach(([parent, markers]) => {
+        markers.forEach(m => {
+          if (doneRoutes[parent]) {
+            if (map.hasLayer(m)) map.removeLayer(m);
+          } else {
+            if (!map.hasLayer(m)) m.addTo(map);
+          }
+        });
+      });
+      renderRouteList();
+    }
+
+    window.markRouteDone = function(parent) {
+      doneRoutes[parent] = true;
+      saveDoneRoutes(doneRoutes);
+      applyRouteVisibility();
+      map.closePopup();
+    };
+
+    function renderRouteList() {
+      const list = document.getElementById('routeList');
+      list.innerHTML = '';
+      const parents = [...new Set(polylines.map(p => p.parentRoute || p.name))];
+      parents.forEach(parent => {
+        const segs = polylines.filter(p => (p.parentRoute || p.name) === parent);
+        const p = segs[0];
+        const isDone = !!doneRoutes[parent];
+        const item = document.createElement('label');
+        item.className = 'route-item' + (isDone ? ' done' : '');
+        const meta = [
+          typeLabel[p.type] || p.type,
+          p.duration_min ? '~' + p.duration_min + ' мин' : '',
+          p.cost_cny ? '¥' + p.cost_cny : ''
+        ].filter(Boolean).join(' · ');
+        const lineBadges = segs.filter(s => s.line).map(s =>
+          `<span class="line-badge" style="background:${s.color}">L${s.line}</span>`
+        ).join('');
+        const swatch = p.type === 'metro' && segs.length > 1
+          ? segs.map(s => `<span class="route-swatch" style="background:${s.color};width:10px;height:10px;display:inline-block;border-radius:2px;margin-right:2px"></span>`).join('')
+          : `<span class="route-swatch" style="background:${p.color};width:14px;height:14px;display:inline-block;border-radius:3px"></span>`;
+
+        const stepsForRoute = metroGuides.filter(g => g.route_key === parent);
+        let stepsHtml = '';
+        if (stepsForRoute.length) {
+          stepsHtml = '<ol class="metro-steps">' + stepsForRoute.map(s => {
+            const stepDone = doneSteps[s.route_key + '-' + s.num];
+            const cls = (s.action === 'transfer' ? 'transfer' : '') + (stepDone ? ' done-step' : '');
+            const lineTag = (s.lines || (s.line ? [s.line] : [])).map(ln =>
+              `<span class="line-badge" style="background:${metroLineColors[ln]}">L${ln}</span>`
+            ).join(' ');
+            return `<li class="${cls}"><span class="step-num">${s.num}.</span>`
+              + `<span class="step-action" style="color:${s.action_color}">${s.action_label}</span> `
+              + `<b>${s.title}</b> ${lineTag}`
+              + (s.direction ? `<br><small>→ ${s.direction}</small>` : '')
+              + `<br><small>${s.instruction.substring(0, 120)}${s.instruction.length>120?'…':''}</small></li>`;
+          }).join('') + '</ol>';
+        }
+
+        item.innerHTML = `
+          <input type="checkbox" ${isDone ? 'checked' : ''} data-route="${parent}" title="Скрыть пройденный маршрут">
+          <div style="display:flex;gap:2px;flex-wrap:wrap;margin-top:2px">${swatch}</div>
+          <div style="flex:1">
+            <div class="route-label">${typeIcon[p.type] || ''} ${p.route_label || p.label}</div>
+            <div class="route-meta">${meta}</div>
+            ${lineBadges ? '<div class="line-badges">' + lineBadges + '</div>' : ''}
+            ${stepsHtml}
+          </div>`;
+        list.appendChild(item);
+      });
+
+      list.querySelectorAll('input[type=checkbox]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const name = cb.dataset.route;
+          if (cb.checked) doneRoutes[name] = true;
+          else delete doneRoutes[name];
+          saveDoneRoutes(doneRoutes);
+          applyRouteVisibility();
+        });
+      });
+    }
+
+    document.getElementById('showAllBtn').addEventListener('click', () => {
+      doneRoutes = {};
+      saveDoneRoutes(doneRoutes);
+      applyRouteVisibility();
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      if (confirm('Сбросить все отметки пройденных маршрутов и шагов?')) {
+        doneRoutes = {};
+        doneSteps = {};
+        saveDoneRoutes(doneRoutes);
+        saveDoneSteps();
+        applyRouteVisibility();
+      }
+    });
+
+    document.getElementById('togglePanel').addEventListener('click', (e) => {
+      const panel = document.getElementById('routePanel');
+      const collapsed = panel.classList.toggle('collapsed');
+      e.target.textContent = collapsed ? '+' : '−';
+    });
+
+    // На телефоне панель по умолчанию свёрнута — больше места для карты
+    if (window.matchMedia('(max-width: 480px)').matches) {
+      const panel = document.getElementById('routePanel');
+      panel.classList.add('collapsed');
+      document.getElementById('togglePanel').textContent = '+';
+    }
+
+    applyRouteVisibility();
+
+    const fitMap = () => map.fitBounds(bounds.pad(0.1), { animate: false, padding: [20, 20] });
+    const refreshMapSize = () => {
+      map.invalidateSize({ animate: false, pan: false });
+      fitMap();
+    };
+    refreshMapSize();
+
+    // Embed HTML / iframe: размер контейнера приходит позже — без этого серые «дыры» в тайлах
+    if (window.self !== window.top) {
+      [50, 150, 400, 1000].forEach(ms => setTimeout(refreshMapSize, ms));
+      if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(() => refreshMapSize()).observe(document.getElementById('map'));
+      }
+    }
+    window.addEventListener('resize', refreshMapSize);
+
+    // В Obsidian (iframe): сначала клик — потом зум колёсиком, иначе скроллится заметка
+    if (window.self !== window.top) {
+      map.scrollWheelZoom.disable();
+      const hint = L.control({ position: 'topright' });
+      hint.onAdd = function() {
+        const d = L.DomUtil.create('div', 'legend');
+        d.id = 'mapHint';
+        d.innerHTML = '<b>Кликните по карте</b><br>затем тяните пальцем/мышью<br>колёсико = зум';
+        return d;
+      };
+      hint.addTo(map);
+      map.once('click', () => {
+        map.scrollWheelZoom.enable();
+        const h = document.getElementById('mapHint');
+        if (h) h.parentElement.parentElement.remove();
+      });
+    }
+
+    const legend = L.control({ position: 'bottomright' });
+    legend.onAdd = function() {
+      const div = L.DomUtil.create('div', 'legend');
+      div.innerHTML = '<b>Типы линий</b><br>'
+        + '<i style="background:#2980b9"></i>Пешком<br>'
+        + '<i style="background:#f39c12"></i>Такси<br>'
+        + '<b>Метро Шанхая</b><br>'
+        + ""
+        + '<span style="color:#e74c3c">●</span> Отель<br>'
+        + '<small>①②③ — шаги метро<br>'
+        + '<span style="color:#e67e22">●</span> оранжевый = пересадка</small>';
+      return div;
+    };
+    legend.addTo(map);
+  </script>
+</body>
+</html>
